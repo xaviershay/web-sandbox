@@ -21,6 +21,13 @@ description:         Please see the README on Github at <https://github.com/gith
 
 dependencies:
 - base >= 4.7 && < 5
+- text
+- time
+- servant
+- servant-server
+- wai
+- warp
+- aeson
 
 library:
   source-dirs: src
@@ -34,7 +41,9 @@ executables:
     - -rtsopts
     - -with-rtsopts=-N
     dependencies:
-    - gigmanager-hs
+      - text
+      - time
+      - gigmanager-hs
 
 tests:
   gigmanager-hs-test:

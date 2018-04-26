@@ -1,6 +1,10 @@
+{-# LANGUAGE OverloadedStrings #-}
+
 module Lib
     ( someFunc
     ) where
 
-someFunc :: IO ()
-someFunc = putStrLn "someFunc"
+import Data.Text
+import Data.Time.Clock
+
+someFunc = undefined
