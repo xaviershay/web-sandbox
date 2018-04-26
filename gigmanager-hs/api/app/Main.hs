@@ -11,6 +11,7 @@
 module Main where
 
 import qualified Data.Text as T
+import Data.Text.IO as T (writeFile, readFile)
 -- import Data.Aeson.Compat
 import Data.Aeson.Types
 import Data.Time
@@ -19,6 +20,11 @@ import Servant.API
 import Network.Wai
 import Network.Wai.Handler.Warp
 import GHC.Generics
+import Servant.JS
+import Servant.Foreign
+import Servant.JS.Internal
+import Data.Monoid ((<>), mconcat)
+import Control.Lens
 
 newtype QuoteId = QuoteId Int deriving (Show, Eq, Generic)
 newtype QuoteDayId = QuoteDayId Int deriving (Show, Eq, Generic)
@@ -50,6 +56,50 @@ instance ToJSON Quote
 type MyAPI = "quotes" :> Get '[JSON] [Quote]
         :<|> "quotes" :> Capture "id" QuoteId :> Get '[JSON] Quote
 
+react :: JavaScriptGenerator
+react = reactWith defCommonGeneratorOptions
+
+reactWith :: CommonGeneratorOptions -> JavaScriptGenerator
+reactWith opts = mconcat . map (generateReactJSWith opts)
+
+generateReactJSWith :: CommonGeneratorOptions -> AjaxReq -> T.Text
+generateReactJSWith opts req =
+    "export function " <> fname <> "(" <> argsStr <> ") {\n" <>
+    "  return fetch(" <> url <> ");\n" <>
+    "}\n\n"
+  where
+    argsStr = T.intercalate ", " args
+    args = captures
+        ++ map (view $ queryArgName . argPath) queryparams
+    --    ++ body
+        ++ map ( toValidFunctionName
+               . (<>) "header"
+               . view (headerArg . argPath)
+               ) hs
+    captures = map (view argPath . captureArg)
+                 . filter isCapture
+                 $ req ^. reqUrl.path
+
+    hs = req ^. reqHeaders
+    --body = if isJust(req ^. reqBody)
+    --         then [requestBody opts]
+    --         else []
+    fname = (functionNameBuilder opts $ req ^. reqFuncName)
+    method = req ^. reqMethod
+    queryparams = req ^.. reqUrl.queryStr.traverse
+    url = if url' == "'" then "'/'" else url'
+    url' = "'"
+       <> urlPrefix opts
+       <> urlArgs
+       <> queryArgs
+
+    urlArgs = jsSegments
+            $ req ^.. reqUrl.path.traverse
+
+    queryArgs = if null queryparams
+                  then ""
+                  else " + '?" <> jsParams queryparams
+
 quotes =
   [ Quote
       { quoteId = QuoteId 123
@@ -76,9 +126,16 @@ myApi =   return quotesList
      :<|> quotesGet
 
 app :: Application
-app = serve myApiProxy myApi
+app = logStdoutDev $
+      serve myApiProxy myApi
 
 focus = main
 
 main :: IO ()
-main = run 8000 app
+main = do
+  let jsApi = jsForAPI myApiProxy .  reactWith $
+                defCommonGeneratorOptions { urlPrefix = "http://localhost:8000"}
+
+  T.writeFile "../frontend/src/ApiFunctions.js" jsApi
+
+  run 8000 $ simpleCors $ app

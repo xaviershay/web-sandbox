@@ -24,10 +24,16 @@ dependencies:
 - text
 - time
 - servant
+- servant-foreign
+- servant-js
 - servant-server
+- servant-options
 - wai
+- wai-cors
+- wai-extra
 - warp
 - aeson
+- lens
 
 library:
   source-dirs: src
