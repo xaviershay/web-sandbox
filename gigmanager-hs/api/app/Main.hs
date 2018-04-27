@@ -34,6 +34,11 @@ import Control.Monad.IO.Class
 import Network.HTTP.Simple hiding (Proxy)
 import Network.HTTP.Media ((//), (/:))
 
+import Control.Monad.Except (runExceptT)
+
+import Crypto.JWT
+import Crypto.JOSE.JWK
+
 import qualified Data.ByteString as B
 import qualified Data.ByteString.Char8 as B8
 import qualified Data.ByteString.Lazy as L
@@ -233,4 +238,19 @@ main = do
   --T.writeFile "../frontend/src/ApiFunctions.js" jsApi
   --putStrLn $ authEndpoint google
 
-  run 8000 $ simpleCors $ app
+  --run 8000 $ simpleCors $ app
+  -- Need to strip off any trailing whitespace
+  contents <- L.reverse . L.drop 1 . L.reverse <$> L.readFile "test.jwt"
+  let maybeJwt = decodeCompact contents :: Either JWTError SignedJWT
+  case maybeJwt of
+    Right jwt -> do
+      Just jwk <- decode <$> L.readFile "google-public-key.jwk"
+      let x = jwk :: JWKSet
+      let config = defaultJWTValidationSettings (\_ -> True)
+      y :: Either JWTError ClaimsSet <- runExceptT $ verifyClaims config jwk jwt
+      let Right claims = y
+
+      putStrLn . show $ (claims ^. unregisteredClaims) ^.at "email"
+      --putStrLn . show $ x
+    Left x -> putStrLn . show $ x
+

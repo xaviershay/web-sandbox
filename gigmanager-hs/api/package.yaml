@@ -38,6 +38,8 @@ dependencies:
 - aeson
 - lens
 - http-media
+- jose
+- mtl
 
 library:
   source-dirs: src
