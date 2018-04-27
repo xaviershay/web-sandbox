@@ -19,6 +19,8 @@ import Servant
 import Servant.API
 import Network.Wai
 import Network.Wai.Handler.Warp
+import Network.Wai.Middleware.RequestLogger
+import Network.Wai.Middleware.Cors
 import GHC.Generics
 import Servant.JS
 import Servant.Foreign

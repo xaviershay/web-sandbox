@@ -3,10 +3,12 @@ import logo from './logo.svg';
 import './App.css';
 import * as api from './ApiFunctions.js';
 
+window.api = api;
+
 class App extends Component {
   render() {
-    window.f = api.getQuotesById(123)
-    window.f.then((data) => console.log(data.json()))
+    api.getQuotesById(123)
+      .then((resp) => resp.json().then((data) => console.log(data)))
     //f.then((data) => console.log(data)).error(() => console.log("error"))
 
     return (
