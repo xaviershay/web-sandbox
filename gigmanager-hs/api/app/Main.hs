@@ -184,12 +184,13 @@ getAuthorized mcode = do
   case mcode of
     Nothing -> error "You must pass in a code as a parameter"
     Just code -> do
-      token <- liftIO $ getAccessToken code
-      return $ case token of
+      stuff <- liftIO $ getAccessToken code
+      return $ case stuff of
         Nothing ->  "<h1>Error Fetching Token</h1>"
-        Just t -> concat ["<h1>Your Token Is:</h1>", "<h3>" , t , "</h3>"]
+        Just (t, jwt) -> concat ["<h1>Your Token Is:</h1>", "<h3>" , t , "</h3>"
+                         , "JWT: ", jwt]
 
-getAccessToken :: String -> IO (Maybe String)
+getAccessToken :: String -> IO (Maybe (String, String))
 getAccessToken code = do
   let endpoint = tokenEndpoint code google
   request' <- parseRequest endpoint
@@ -204,8 +205,9 @@ getAccessToken code = do
   response <- httpJSONEither request
   return $ case (getResponseBody response :: Either JSONException Object) of
              Left _ -> Nothing
-             Right obj -> case HM.lookup "access_token" obj of
-                            Just (String x) -> Just . T.unpack $ x
+             Right obj -> case (HM.lookup "access_token" obj, HM.lookup "id_token" obj) of
+                            (Just (String x), Just (String jwt)) ->
+                              Just (T.unpack x, T.unpack jwt)
              _ -> Nothing
 
 myApiProxy :: Proxy MyAPI
