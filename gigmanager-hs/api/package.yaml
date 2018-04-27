@@ -21,19 +21,23 @@ description:         Please see the README on Github at <https://github.com/gith
 
 dependencies:
 - base >= 4.7 && < 5
+- bytestring
+- unordered-containers
+- http-conduit
 - text
 - time
 - servant
 - servant-foreign
 - servant-js
 - servant-server
-- servant-options
+- servant-auth-server
 - wai
 - wai-cors
 - wai-extra
 - warp
 - aeson
 - lens
+- http-media
 
 library:
   source-dirs: src
