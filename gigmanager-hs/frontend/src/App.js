@@ -1,25 +1,31 @@
 import React, { Component } from 'react';
-import logo from './logo.svg';
 import './App.css';
 import * as api from './ApiFunctions.js';
 
 window.api = api;
 
 class App extends Component {
-  render() {
-    api.getQuotesById(123)
-      .then((resp) => resp.json().then((data) => console.log(data)))
-    //f.then((data) => console.log(data)).error(() => console.log("error"))
+  constructor() {
+    super();
+    this.state = {
+      quotes: []
+    }
+  }
 
+  componentDidMount() {
+    api.getQuotes()
+      .then((resp) => resp.json())
+      .then((data) => { console.log(data); this.setState({"quotes": data})})
+  }
+
+  render() {
     return (
       <div className="App">
-        <header className="App-header">
-          <img src={logo} className="App-logo" alt="logo" />
-          <h1 className="App-title">Welcome to React</h1>
-        </header>
-        <p className="App-intro">
-          To get started, edit <code>src/App.js</code> and save to reload.
-        </p>
+        <ul>
+          {this.state.quotes.map((q) =>
+            <li key={q.quoteId}>{q.quoteDescription}</li>
+          )}
+        </ul>
       </div>
     );
   }
