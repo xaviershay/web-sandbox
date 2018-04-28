@@ -12,10 +12,11 @@
 
 module Main where
 
+import qualified System.Posix.Signals as S
 import qualified Data.Text as T
 import Data.Text.IO as T (writeFile, readFile)
 import Data.Aeson
-import Data.Maybe (fromJust)
+import Data.Maybe (fromJust, listToMaybe)
 import Data.Aeson.Types
 import Data.Time
 import Debug.Trace
@@ -37,13 +38,20 @@ import Data.Monoid ((<>), mconcat)
 import Control.Lens
 import Control.Monad.IO.Class
 import Network.HTTP.Simple hiding (Proxy)
+import Network.HTTP.Client.TLS
 import Network.HTTP.Media ((//), (/:))
 import Data.String (fromString)
 import Control.Concurrent
+import Control.Applicative
+import Data.Time.Clock
+import Data.Time.Clock.POSIX
+import Text.ParserCombinators.ReadP
+import Data.Char
+import Network.HTTP.Types.Header
 
 import Control.Monad.Except (runExceptT)
 
-import Crypto.JWT
+import Crypto.JWT hiding (string)
 import Crypto.JOSE.JWK
 
 import qualified Data.ByteString as B
@@ -244,7 +252,6 @@ validateJwt keyset bearerCreds = do
 
   verifiedJwt :: Either JWTError ClaimsSet <- liftIO . runExceptT $ verifyClaims config keyset unverifiedJwt
 
-  --liftIO . putStrLn . show $ verifiedJwt
   case verifiedJwt of
     Left e -> throwError err401
     Right claims -> return Account
@@ -258,7 +265,6 @@ authHandler config = mkAuthHandler handler
         Just jwt -> validateJwt keyset jwt
         Nothing -> throwError err401
 
-      liftIO . putStrLn . show . lookup "Authorization" . requestHeaders $ req
       return Account
 
 type instance AuthServerData (AuthProtect "google-jwt") = Account
@@ -286,6 +292,49 @@ data AppConfig = AppConfig
   { cnfJwk :: MVar JWKSet
   }
 
+computeExpireTime :: POSIXTime -> Network.HTTP.Simple.Response L8.ByteString -> Maybe Int
+computeExpireTime now rs =
+    let hs              = getResponseHeaders rs
+        expires         = do    e <- lookupHeader hExpires hs
+                                t <- parseTimeM True defaultTimeLocale "%a, %e %b %Y %T %Z" (B8.unpack e)
+                                return . fromIntegral . round $ (utcTimeToPOSIXSeconds t - now)
+        cachecontrol    = do    c <- lookupHeader hCacheControl hs
+                                d <- readMaxAge $ B8.unpack c
+                                return $ d
+    in  cachecontrol <|> expires
+
+readMaxAge :: String -> Maybe Int
+readMaxAge = fmap fst . listToMaybe . readP_to_S p
+    where p = (string "max-age=" >> read <$> munch isDigit) +++ (get >>= const p)
+
+lookupHeader h = listToMaybe . map snd . filter ((h==) . fst)
+
+loadGooglePublicKey :: MVar JWKSet -> IO ()
+loadGooglePublicKey mvar = do
+  manager <- newTlsManager
+  let request = "https://www.googleapis.com/oauth2/v3/certs"
+  response <- httpLBS request
+  t <- liftIO getPOSIXTime
+
+  if getResponseStatusCode response == 200 then
+    do
+      let expiresInSeconds = (fromJust $ computeExpireTime t response)
+      let body = getResponseBody response
+
+      -- TODO: Better error handling
+      Just jwkData <- decode <$> (L.readFile $ "google-public-key.jwk")
+
+      swapMVar mvar jwkData
+      -- TODO: Proper logging
+      putStrLn $ "Loaded google public key, caching for " <> show expiresInSeconds <> " seconds"
+      threadDelay (expiresInSeconds * 1000000)
+  else
+    do
+      putStrLn "Error loading google public key, retrying in 1s"
+      threadDelay 1000000
+
+  loadGooglePublicKey mvar
+
 main :: IO ()
 main = do
   --let jsApi = jsForAPI myApiProxy .  reactWith $
@@ -298,6 +347,13 @@ main = do
 
   jwkVar <- newMVar jwkData
   let config = AppConfig { cnfJwk = jwkVar }
+
+  threadId <- forkIO (loadGooglePublicKey jwkVar)
+  tid <- myThreadId
+
+  -- Ensure that threads are cleaned up when developing in GHCI. Kill thread is
+  -- dangerous, but it's only for dev mode so don't care.
+  S.installHandler S.keyboardSignal (S.Catch (killThread threadId >> killThread tid)) Nothing
 
   run 8000 (app config)
   -- Need to strip off any trailing whitespace

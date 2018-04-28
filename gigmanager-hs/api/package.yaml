@@ -22,8 +22,11 @@ description:         Please see the README on Github at <https://github.com/gith
 dependencies:
 - base >= 4.7 && < 5
 - bytestring
+- containers
 - unordered-containers
 - http-conduit
+- http-types
+- connection
 - text
 - time
 - servant
@@ -32,7 +35,9 @@ dependencies:
 - servant-server
 - servant-auth-server
 - servant-options
+- unix
 - wai
+- exceptions
 - wai-cors
 - wai-extra
 - warp
@@ -41,6 +46,7 @@ dependencies:
 - http-media
 - jose
 - mtl
+- http-client-tls
 
 library:
   source-dirs: src
