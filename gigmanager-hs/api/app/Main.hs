@@ -15,6 +15,7 @@ module Main where
 import qualified Data.Text as T
 import Data.Text.IO as T (writeFile, readFile)
 import Data.Aeson
+import Data.Maybe (fromJust)
 import Data.Aeson.Types
 import Data.Time
 import Debug.Trace
@@ -37,6 +38,8 @@ import Control.Lens
 import Control.Monad.IO.Class
 import Network.HTTP.Simple hiding (Proxy)
 import Network.HTTP.Media ((//), (/:))
+import Data.String (fromString)
+import Control.Concurrent
 
 import Control.Monad.Except (runExceptT)
 
@@ -232,20 +235,36 @@ myApiProxy = Proxy
 
 data Account = Account
 
---validateJwt :: ByteString -> Handler Account
---validateJwt _ = return Account
+validateJwt :: JWKSet -> B8.ByteString -> Handler Account
+validateJwt keyset bearerCreds = do
+  let config = defaultJWTValidationSettings (== (fromString $ oauthClientId google))
+  --
+  -- TODO: Remove Right
+  let Right unverifiedJwt = decodeCompact (L8.fromStrict $ B8.drop (B.length "Bearer ") bearerCreds) :: Either JWTError SignedJWT
 
-authHandler :: AuthHandler Network.Wai.Request Account
-authHandler = mkAuthHandler handler
+  verifiedJwt :: Either JWTError ClaimsSet <- liftIO . runExceptT $ verifyClaims config keyset unverifiedJwt
+
+  --liftIO . putStrLn . show $ verifiedJwt
+  case verifiedJwt of
+    Left e -> throwError err401
+    Right claims -> return Account
+
+authHandler :: AppConfig -> AuthHandler Network.Wai.Request Account
+authHandler config = mkAuthHandler handler
   where
     handler req = do
+      keyset <- liftIO . readMVar $ cnfJwk config
+      case lookup "Authorization" . requestHeaders $ req of
+        Just jwt -> validateJwt keyset jwt
+        Nothing -> throwError err401
+
       liftIO . putStrLn . show . lookup "Authorization" . requestHeaders $ req
       return Account
 
 type instance AuthServerData (AuthProtect "google-jwt") = Account
 
-serverContext :: Servant.Context (AuthHandler Network.Wai.Request Account ': '[])
-serverContext = authHandler :. EmptyContext
+serverContext :: AppConfig -> Servant.Context (AuthHandler Network.Wai.Request Account ': '[])
+serverContext config = (authHandler config) :. EmptyContext
 
 myApi :: Server MyAPI
 myApi =   (\account -> return quotesList)
@@ -255,13 +274,17 @@ myApi =   (\account -> return quotesList)
 
 policy = simpleCorsResourcePolicy { corsRequestHeaders = [ "authorization", "content-type" ] }
 
-app :: Application
-app = logStdoutDev $
-      cors (const $ Just policy) $
-      provideOptions myApiProxy $
-      serveWithContext myApiProxy serverContext myApi
+app :: AppConfig -> Application
+app config = logStdoutDev $
+              cors (const $ Just policy) $
+              provideOptions myApiProxy $
+              serveWithContext myApiProxy (serverContext config) myApi
 
 focus = main
+
+data AppConfig = AppConfig
+  { cnfJwk :: MVar JWKSet
+  }
 
 main :: IO ()
 main = do
@@ -271,7 +294,12 @@ main = do
   --T.writeFile "../frontend/src/ApiFunctions.js" jsApi
   --putStrLn $ authEndpoint google
 
-  run 8000 app
+  Just jwkData <- decode <$> (L.readFile $ "google-public-key.jwk")
+
+  jwkVar <- newMVar jwkData
+  let config = AppConfig { cnfJwk = jwkVar }
+
+  run 8000 (app config)
   -- Need to strip off any trailing whitespace
   --contents <- L.reverse . L.drop 1 . L.reverse <$> L.readFile "test.jwt"
   --let maybeJwt = decodeCompact contents :: Either JWTError SignedJWT
