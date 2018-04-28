@@ -1,3 +1,4 @@
+{-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE DataKinds           #-}
 {-# LANGUAGE DeriveGeneric       #-}
@@ -23,11 +24,14 @@ import Network.Wai
 import Network.Wai.Handler.Warp
 import Network.Wai.Middleware.RequestLogger
 import Network.Wai.Middleware.Cors
+import Network.Wai.Middleware.Servant.Options
 import GHC.Generics
 import Servant.JS
 import Servant.Foreign
 import Servant.JS.Internal
 import Servant.Auth.Server
+import Servant.API.Experimental.Auth
+import Servant.Server.Experimental.Auth
 import Data.Monoid ((<>), mconcat)
 import Control.Lens
 import Control.Monad.IO.Class
@@ -45,6 +49,15 @@ import qualified Data.ByteString.Lazy as L
 import qualified Data.ByteString.Lazy.Char8 as L8
 
 import qualified Data.HashMap.Strict as HM
+
+-- see https://github.com/sordina/servant-options/issues/2
+instance (HasForeign lang ftype api) =>
+  HasForeign lang ftype (AuthProtect k :> api) where
+
+  type Foreign ftype (AuthProtect k :> api) = Foreign ftype api
+
+  foreignFor lang Proxy Proxy subR =
+    foreignFor lang Proxy (Proxy :: Proxy api) subR
 
 scope = T.unpack $ T.intercalate " "
   [ "email"
@@ -114,10 +127,10 @@ instance Accept HTML where
 instance MimeRender HTML String where
   mimeRender _ = L8.pack
 
-type MyAPI = "quotes" :> Get '[JSON] [Quote]
+type MyAPI = AuthProtect "google-jwt" :> "quotes" :> Get '[JSON] [Quote]
         :<|> "quotes" :> Capture "id" QuoteId :> Get '[JSON] Quote
-        :<|> "authorize" :> Get '[HTML] HTML
-        :<|> "authorized" :> QueryParam "code" String :> Get '[HTML] HTML
+        -- :<|> "authorize" :> Get '[HTML] HTML
+        -- :<|> "authorized" :> QueryParam "code" String :> Get '[HTML] HTML
 
 react :: JavaScriptGenerator
 react = reactWith defCommonGeneratorOptions
@@ -213,20 +226,40 @@ getAccessToken code = do
              Right obj -> case (HM.lookup "access_token" obj, HM.lookup "id_token" obj) of
                             (Just (String x), Just (String jwt)) ->
                               Just (T.unpack x, T.unpack jwt)
-             _ -> Nothing
 
 myApiProxy :: Proxy MyAPI
 myApiProxy = Proxy
 
+data Account = Account
+
+--validateJwt :: ByteString -> Handler Account
+--validateJwt _ = return Account
+
+authHandler :: AuthHandler Network.Wai.Request Account
+authHandler = mkAuthHandler handler
+  where
+    handler req = do
+      liftIO . putStrLn . show . lookup "Authorization" . requestHeaders $ req
+      return Account
+
+type instance AuthServerData (AuthProtect "google-jwt") = Account
+
+serverContext :: Servant.Context (AuthHandler Network.Wai.Request Account ': '[])
+serverContext = authHandler :. EmptyContext
+
 myApi :: Server MyAPI
-myApi =   return quotesList
+myApi =   (\account -> return quotesList)
      :<|> quotesGet
-     :<|> getAuthorize
-     :<|> getAuthorized
+     -- :<|> getAuthorize
+     -- :<|> getAuthorized
+
+policy = simpleCorsResourcePolicy { corsRequestHeaders = [ "authorization", "content-type" ] }
 
 app :: Application
 app = logStdoutDev $
-      serve myApiProxy myApi
+      cors (const $ Just policy) $
+      provideOptions myApiProxy $
+      serveWithContext myApiProxy serverContext myApi
 
 focus = main
 
@@ -238,19 +271,19 @@ main = do
   --T.writeFile "../frontend/src/ApiFunctions.js" jsApi
   --putStrLn $ authEndpoint google
 
-  --run 8000 $ simpleCors $ app
+  run 8000 app
   -- Need to strip off any trailing whitespace
-  contents <- L.reverse . L.drop 1 . L.reverse <$> L.readFile "test.jwt"
-  let maybeJwt = decodeCompact contents :: Either JWTError SignedJWT
-  case maybeJwt of
-    Right jwt -> do
-      Just jwk <- decode <$> L.readFile "google-public-key.jwk"
-      let x = jwk :: JWKSet
-      let config = defaultJWTValidationSettings (\_ -> True)
-      y :: Either JWTError ClaimsSet <- runExceptT $ verifyClaims config jwk jwt
-      let Right claims = y
+  --contents <- L.reverse . L.drop 1 . L.reverse <$> L.readFile "test.jwt"
+  --let maybeJwt = decodeCompact contents :: Either JWTError SignedJWT
+  --case maybeJwt of
+  --  Right jwt -> do
+  --    Just jwk <- decode <$> L.readFile "google-public-key.jwk"
+  --    let x = jwk :: JWKSet
+  --    let config = defaultJWTValidationSettings (\_ -> True)
+  --    y :: Either JWTError ClaimsSet <- runExceptT $ verifyClaims config jwk jwt
+  --    let Right claims = y
 
-      putStrLn . show $ (claims ^. unregisteredClaims) ^.at "email"
-      --putStrLn . show $ x
-    Left x -> putStrLn . show $ x
+  --    putStrLn . show $ (claims ^. unregisteredClaims) ^.at "email"
+  --    --putStrLn . show $ x
+  --  Left x -> putStrLn . show $ x
 
