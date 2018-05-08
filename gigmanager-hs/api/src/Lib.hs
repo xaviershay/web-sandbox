@@ -7,4 +7,7 @@ module Lib
 import Data.Text
 import Data.Time.Clock
 
+import Types
+import Auth
+
 someFunc = undefined
