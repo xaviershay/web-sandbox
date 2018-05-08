@@ -49,7 +49,7 @@ import Text.ParserCombinators.ReadP
 import Data.Char
 import Network.HTTP.Types.Header
 
-import Control.Monad.Except (runExceptT)
+import Control.Monad.Except (runExceptT, MonadError)
 
 import Crypto.JWT hiding (string)
 import Crypto.JOSE.JWK
@@ -130,18 +130,8 @@ instance ToJSON QuoteDayId
 instance ToJSON QuoteDay
 instance ToJSON Quote
 
-type HTML = String
-
-instance Accept HTML where
-  contentType _ = "text" // "html" /: ("charset", "utf-8")
-
-instance MimeRender HTML String where
-  mimeRender _ = L8.pack
-
 type MyAPI = AuthProtect "google-jwt" :> "quotes" :> Get '[JSON] [Quote]
         :<|> "quotes" :> Capture "id" QuoteId :> Get '[JSON] Quote
-        -- :<|> "authorize" :> Get '[HTML] HTML
-        -- :<|> "authorized" :> QueryParam "code" String :> Get '[HTML] HTML
 
 react :: JavaScriptGenerator
 react = reactWith defCommonGeneratorOptions
@@ -205,67 +195,40 @@ quotesGet id = case filter (\q -> quoteId q == id) $ quotes of
                  [] -> throwError err404 { errBody = "no quote with that ID" }
                  (x:_) -> return x
 
-getAuthorize :: Handler HTML
-getAuthorize = return $ concat ["<h1><a href=", authEndpoint google, ">", "Get Authorized!", "</a></h1>"]
-
-getAuthorized :: Maybe String -> Handler HTML
-getAuthorized mcode = do
-  case mcode of
-    Nothing -> error "You must pass in a code as a parameter"
-    Just code -> do
-      stuff <- liftIO $ getAccessToken code
-      return $ case stuff of
-        Nothing ->  "<h1>Error Fetching Token</h1>"
-        Just (t, jwt) -> concat ["<h1>Your Token Is:</h1>", "<h3>" , t , "</h3>"
-                         , "JWT: ", jwt]
-
-getAccessToken :: String -> IO (Maybe (String, String))
-getAccessToken code = do
-  let endpoint = tokenEndpoint code google
-  request' <- parseRequest endpoint
-  let request = setRequestMethod "POST"
-                $ addRequestHeader "Accept" "application/json"
-                $ setRequestQueryString [("client_id", Just . B8.pack . oauthClientId $ google)
-                                        , ("client_secret", Just . B8.pack . oauthClientSecret $ google)
-                                        , ("redirect_uri", Just "http://localhost:8000/authorized")
-                                        , ("grant_type", Just "authorization_code")
-                                        , ("code", Just . B8.pack $ code)]
-                $ request'
-  response <- httpJSONEither request
-  return $ case (getResponseBody response :: Either JSONException Object) of
-             Left _ -> Nothing
-             Right obj -> case (HM.lookup "access_token" obj, HM.lookup "id_token" obj) of
-                            (Just (String x), Just (String jwt)) ->
-                              Just (T.unpack x, T.unpack jwt)
-
 myApiProxy :: Proxy MyAPI
 myApiProxy = Proxy
 
 data Account = Account
 
-validateJwt :: JWKSet -> B8.ByteString -> Handler Account
+validateJwt :: (MonadError String m, MonadIO m) => JWKSet -> B8.ByteString -> m Account
 validateJwt keyset bearerCreds = do
   let config = defaultJWTValidationSettings (== (fromString $ oauthClientId google))
-  --
-  -- TODO: Remove Right
-  let Right unverifiedJwt = decodeCompact (L8.fromStrict $ B8.drop (B.length "Bearer ") bearerCreds) :: Either JWTError SignedJWT
 
-  verifiedJwt :: Either JWTError ClaimsSet <- liftIO . runExceptT $ verifyClaims config keyset unverifiedJwt
+  verifiedJwt <- liftIO . runExceptT $
+        decodeCompact (L8.fromStrict $ B8.drop (B.length "Bearer ") bearerCreds)
+    >>= verifyClaims config keyset
 
   case verifiedJwt of
-    Left e -> throwError err401
-    Right claims -> return Account
+    Left (e :: JWTError) -> throwError ("Could not verify JWT: " <> show e)
+    Right _              -> return Account
+
+toError :: (MonadError e m) => e -> Maybe a -> m a
+toError s = maybe (throwError s) (return)
+
+throw401 s = throwError err401 { errBody = L8.pack s }
+
+lookupRequestHeader h = lookup h . requestHeaders
 
 authHandler :: AppConfig -> AuthHandler Network.Wai.Request Account
 authHandler config = mkAuthHandler handler
   where
     handler req = do
       keyset <- liftIO . readMVar $ cnfJwk config
-      case lookup "Authorization" . requestHeaders $ req of
-        Just jwt -> validateJwt keyset jwt
-        Nothing -> throwError err401
+      account <- liftIO . runExceptT $
+            toError "No Authorization header present" (lookupRequestHeader "Authorization" req)
+        >>= validateJwt keyset
 
-      return Account
+      either throw401 return account
 
 type instance AuthServerData (AuthProtect "google-jwt") = Account
 
