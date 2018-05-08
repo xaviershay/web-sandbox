@@ -322,7 +322,7 @@ loadGooglePublicKey mvar = do
       let body = getResponseBody response
 
       -- TODO: Better error handling
-      Just jwkData <- decode <$> (L.readFile $ "google-public-key.jwk")
+      let Just jwkData = decode body
 
       swapMVar mvar jwkData
       -- TODO: Proper logging
@@ -343,9 +343,8 @@ main = do
   --T.writeFile "../frontend/src/ApiFunctions.js" jsApi
   --putStrLn $ authEndpoint google
 
-  Just jwkData <- decode <$> (L.readFile $ "google-public-key.jwk")
 
-  jwkVar <- newMVar jwkData
+  jwkVar <- newEmptyMVar
   let config = AppConfig { cnfJwk = jwkVar }
 
   threadId <- forkIO (loadGooglePublicKey jwkVar)
@@ -356,18 +355,3 @@ main = do
   S.installHandler S.keyboardSignal (S.Catch (killThread threadId >> killThread tid)) Nothing
 
   run 8000 (app config)
-  -- Need to strip off any trailing whitespace
-  --contents <- L.reverse . L.drop 1 . L.reverse <$> L.readFile "test.jwt"
-  --let maybeJwt = decodeCompact contents :: Either JWTError SignedJWT
-  --case maybeJwt of
-  --  Right jwt -> do
-  --    Just jwk <- decode <$> L.readFile "google-public-key.jwk"
-  --    let x = jwk :: JWKSet
-  --    let config = defaultJWTValidationSettings (\_ -> True)
-  --    y :: Either JWTError ClaimsSet <- runExceptT $ verifyClaims config jwk jwt
-  --    let Right claims = y
-
-  --    putStrLn . show $ (claims ^. unregisteredClaims) ^.at "email"
-  --    --putStrLn . show $ x
-  --  Left x -> putStrLn . show $ x
-
