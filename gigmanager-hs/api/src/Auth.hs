@@ -12,6 +12,7 @@ import Control.Monad.Except (runExceptT, MonadError, MonadIO, throwError, liftIO
 import Control.Concurrent (readMVar, MVar, threadDelay, swapMVar)
 import Data.Maybe (fromJust, listToMaybe)
 import Data.Monoid ((<>))
+import qualified Data.Text as T
 import Text.ParserCombinators.ReadP
 import Data.String (fromString)
 import Data.Char (isDigit)
@@ -29,11 +30,9 @@ import Control.Applicative ((<|>))
 import Network.HTTP.Client.TLS (newTlsManager)
 import Data.Aeson (decode)
 
-oauthClientId = "548142593260-q8s4d9d4hsqmb30sg3ljcdd4m2km2nav.apps.googleusercontent.com"
-
-validateJwt :: (MonadError String m, MonadIO m) => JWKSet -> B8.ByteString -> m Account
-validateJwt keyset bearerCreds = do
-  let config = defaultJWTValidationSettings (== (fromString oauthClientId))
+validateJwt :: (MonadError String m, MonadIO m) => T.Text -> JWKSet -> B8.ByteString -> m Account
+validateJwt clientId keyset bearerCreds = do
+  let config = defaultJWTValidationSettings (== (fromString . T.unpack $ clientId))
 
   verifiedJwt <- liftIO . runExceptT $
         decodeCompact (L8.fromStrict $ B8.drop (B8.length "Bearer ") bearerCreds)
@@ -50,14 +49,14 @@ throw401 s = throwError err401 { errBody = L8.pack s }
 
 lookupRequestHeader h = lookup h . requestHeaders
 
-authHandler :: AppConfig -> AuthHandler Request Account
-authHandler config = mkAuthHandler handler
+handler :: AppConfig -> AuthHandler Request Account
+handler config = mkAuthHandler f
   where
-    handler req = do
+    f req = do
       keyset <- liftIO . readMVar $ cnfJwk config
       account <- liftIO . runExceptT $
             toError "No Authorization header present" (lookupRequestHeader "Authorization" req)
-        >>= validateJwt keyset
+        >>= validateJwt (cnfOauthClientId config) keyset
 
       either throw401 return account
 

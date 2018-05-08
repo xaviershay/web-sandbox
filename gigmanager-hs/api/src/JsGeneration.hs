@@ -5,12 +5,22 @@ module JsGeneration where
 import Servant.JS
 import Servant.JS.Internal
 import Servant.Foreign
-import Servant
-import Servant.API
 import qualified Data.Text as T
 import Control.Lens
 import Data.Monoid ((<>))
+import Data.Text.IO as T (writeFile)
 
+import Api
+
+writeJsClient :: T.Text -> FilePath -> IO ()
+writeJsClient host path = do
+  let jsApi = jsForAPI myApiProxy .  reactWith $
+                defCommonGeneratorOptions { urlPrefix = host }
+
+  T.writeFile path jsApi
+
+-- "../frontend/src/ApiFunctions.js"
+-- "http://localhost:8000"
 react :: JavaScriptGenerator
 react = reactWith defCommonGeneratorOptions
 
@@ -40,7 +50,7 @@ generateReactJSWith opts req =
     --         then [requestBody opts]
     --         else []
     fname = (functionNameBuilder opts $ req ^. reqFuncName)
-    method = req ^. reqMethod
+    -- method = req ^. reqMethod
     queryparams = req ^.. reqUrl.queryStr.traverse
     url = if url' == "'" then "'/'" else url'
     url' = "'"

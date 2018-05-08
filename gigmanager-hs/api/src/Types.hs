@@ -4,7 +4,7 @@ module Types where
 
 import Crypto.JWT (JWKSet)
 import Data.Aeson (ToJSON)
-import Control.Concurrent (MVar)
+import Control.Concurrent (MVar, newEmptyMVar)
 import GHC.Generics (Generic)
 import Data.Time (UTCTime, Day)
 import qualified Data.Text as T
@@ -13,7 +13,17 @@ data Account = Account
 
 data AppConfig = AppConfig
   { cnfJwk :: MVar JWKSet
+  , cnfOauthClientId :: T.Text
   }
+
+mkConfig :: T.Text -> IO AppConfig
+mkConfig clientId = do
+  jwkVar <- newEmptyMVar
+
+  return $ AppConfig { cnfJwk = jwkVar
+                     , cnfOauthClientId = clientId
+                     }
+  
 
 newtype QuoteId = QuoteId Int deriving (Show, Eq, Generic)
 newtype QuoteDayId = QuoteDayId Int deriving (Show, Eq, Generic)
