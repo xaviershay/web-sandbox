@@ -2,103 +2,70 @@
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 
+-- This module contains both specific validation functions for handling Google
+-- JWTs, and a Servant Generalized Authentication handler as documented here:
+--
+-- http://haskell-servant.readthedocs.io/en/stable/tutorial/Authentication.html#generalized-authentication-in-action
 module Auth where
 
 import Types
 
-import Crypto.JWT (defaultJWTValidationSettings, decodeCompact, verifyClaims, JWTError, JWKSet)
-
-import Control.Monad.Except (runExceptT, MonadError, MonadIO, throwError, liftIO)
-import Control.Concurrent (readMVar, MVar, threadDelay, swapMVar)
-import Data.Maybe (fromJust, listToMaybe)
-import Data.Monoid ((<>))
-import qualified Data.Text as T
-import Text.ParserCombinators.ReadP
-import Data.String (fromString)
-import Data.Char (isDigit)
-import Network.Wai (Request, requestHeaders)
-import Servant (errBody, err401)
-import Servant.Server.Experimental.Auth (AuthHandler, mkAuthHandler)
-import qualified Data.ByteString.Char8 as B8
-import qualified Data.ByteString.Lazy.Char8 as L8
-
-import Data.Time.Format (parseTimeM, defaultTimeLocale)
-import Data.Time.Clock.POSIX (POSIXTime, getPOSIXTime, utcTimeToPOSIXSeconds)
-import Network.HTTP.Simple hiding (Proxy, Request)
-import Network.HTTP.Types.Header (hCacheControl, hExpires)
-import Control.Applicative ((<|>))
-import Network.HTTP.Client.TLS (newTlsManager)
-import Data.Aeson (decode)
+import           Control.Concurrent               (readMVar)
+import           Control.Monad.Except
+    (MonadError, MonadIO, liftIO, runExceptT, throwError)
+import           Crypto.JWT
+    ( JWKSet
+    , JWTError
+    , decodeCompact
+    , defaultJWTValidationSettings
+    , verifyClaims
+    )
+import qualified Data.ByteString.Char8            as B8
+import qualified Data.ByteString.Lazy.Char8       as L8
+import           Data.Monoid                      ((<>))
+import           Data.String                      (fromString)
+import qualified Data.Text                        as T
+import           Network.Wai                      (Request, requestHeaders)
+import           Servant                          (err401, errBody)
+import           Servant.Server.Experimental.Auth (AuthHandler, mkAuthHandler)
 
 validateJwt :: (MonadError String m, MonadIO m) => T.Text -> JWKSet -> B8.ByteString -> m Account
 validateJwt clientId keyset bearerCreds = do
+  -- These settings will verify that the JWT was issued in response to an OAuth
+  -- request that used our client ID. That cliend ID is public, but is
+  -- restricted to our specific domains that Google will allow authentication
+  -- from.
   let config = defaultJWTValidationSettings (== (fromString . T.unpack $ clientId))
 
+  -- "compact" is the name for a base64 encoded JWT. Since the raw
+  -- Authorization header is passed in, we need to drop the leading "Bearer "
+  -- text before decoding.
+  --
+  -- TODO: Come back and either remove or explain the liftIO . runExceptT
   verifiedJwt <- liftIO . runExceptT $
         decodeCompact (L8.fromStrict $ B8.drop (B8.length "Bearer ") bearerCreds)
     >>= verifyClaims config keyset
 
+  -- TODO: Extract email from JWT and put in account.
   case verifiedJwt of
     Left (e :: JWTError) -> throwError ("Could not verify JWT: " <> show e)
     Right _              -> return Account
 
-toError :: (MonadError e m) => e -> Maybe a -> m a
-toError s = maybe (throwError s) (return)
 
-throw401 s = throwError err401 { errBody = L8.pack s }
-
-lookupRequestHeader h = lookup h . requestHeaders
-
+-- A servant Generalized Authorization handler. Will 401 unless a valid JWT is present.
 handler :: AppConfig -> AuthHandler Request Account
 handler config = mkAuthHandler f
   where
     f req = do
       keyset <- liftIO . readMVar $ cnfJwk config
       account <- liftIO . runExceptT $
-            toError "No Authorization header present" (lookupRequestHeader "Authorization" req)
+            maybeToError "No Authorization header present" (lookupReqHeader "Authorization" req)
         >>= validateJwt (cnfOauthClientId config) keyset
 
       either throw401 return account
 
-computeExpireTime :: POSIXTime -> Network.HTTP.Simple.Response L8.ByteString -> Maybe Int
-computeExpireTime now rs =
-    let hs              = getResponseHeaders rs
-        expires         = do    e <- lookupHeader hExpires hs
-                                t <- parseTimeM True defaultTimeLocale "%a, %e %b %Y %T %Z" (B8.unpack e)
-                                return . fromIntegral . round $ (utcTimeToPOSIXSeconds t - now)
-        cachecontrol    = do    c <- lookupHeader hCacheControl hs
-                                d <- readMaxAge $ B8.unpack c
-                                return $ d
-    in  cachecontrol <|> expires
+    lookupReqHeader h = lookup h . requestHeaders
+    throw401 s = throwError err401 { errBody = L8.pack s }
 
-readMaxAge :: String -> Maybe Int
-readMaxAge = fmap fst . listToMaybe . readP_to_S p
-    where p = (string "max-age=" >> read <$> munch isDigit) +++ (get >>= const p)
-
-lookupHeader h = listToMaybe . map snd . filter ((h==) . fst)
-
-loadGooglePublicKey :: MVar JWKSet -> IO ()
-loadGooglePublicKey mvar = do
-  manager <- newTlsManager
-  let request = "https://www.googleapis.com/oauth2/v3/certs"
-  response <- httpLBS request
-  t <- liftIO getPOSIXTime
-
-  if getResponseStatusCode response == 200 then
-    do
-      let expiresInSeconds = (fromJust $ computeExpireTime t response)
-      let body = getResponseBody response
-
-      -- TODO: Better error handling
-      let Just jwkData = decode body
-
-      swapMVar mvar jwkData
-      -- TODO: Proper logging
-      putStrLn $ "Loaded google public key, caching for " <> show expiresInSeconds <> " seconds"
-      threadDelay (expiresInSeconds * 1000000)
-  else
-    do
-      putStrLn "Error loading google public key, retrying in 1s"
-      threadDelay 1000000
-
-  loadGooglePublicKey mvar
+    maybeToError :: (MonadError e m) => e -> Maybe a -> m a
+    maybeToError s = maybe (throwError s) (return)

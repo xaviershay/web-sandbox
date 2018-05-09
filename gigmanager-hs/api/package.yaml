@@ -46,6 +46,7 @@ dependencies:
 - http-media
 - jose
 - mtl
+- http-client
 - http-client-tls
 
 library:

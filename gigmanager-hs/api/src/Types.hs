@@ -10,9 +10,11 @@ import Data.Time (UTCTime, Day)
 import qualified Data.Text as T
 
 data Account = Account
+data Environment = Development | Production deriving (Show, Eq)
 
 data AppConfig = AppConfig
   { cnfJwk :: MVar JWKSet
+  , cnfEnv :: Environment
   , cnfOauthClientId :: T.Text
   }
 
@@ -21,9 +23,10 @@ mkConfig clientId = do
   jwkVar <- newEmptyMVar
 
   return $ AppConfig { cnfJwk = jwkVar
+                     , cnfEnv = Development
                      , cnfOauthClientId = clientId
                      }
-  
+
 
 newtype QuoteId = QuoteId Int deriving (Show, Eq, Generic)
 newtype QuoteDayId = QuoteDayId Int deriving (Show, Eq, Generic)
