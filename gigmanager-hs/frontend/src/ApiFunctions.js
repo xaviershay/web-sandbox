@@ -1,8 +1,16 @@
-export function getQuotes() {
-  return fetch('http://localhost:8000/quotes');
+class Api {
+  constructor(jwt) { this.jwt = jwt }
+
+getEmail() {
+  return fetch('http://localhost:8000/email', { bogus: true
+    , headers: { "Authorization": "Bearer " + this.jwt }
+  });
 }
 
-export function getQuotesById(id) {
-  return fetch('http://localhost:8000/quotes/' + encodeURIComponent(id) + '');
+getUnprotected() {
+  return fetch('http://localhost:8000/unprotected', { bogus: true
+  });
 }
 
+}
+export { Api as default }

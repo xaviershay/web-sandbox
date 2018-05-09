@@ -2,9 +2,9 @@
 
 import React, { Component } from 'react';
 import './App.css';
-import * as api from './ApiFunctions.js';
+import Api from './ApiFunctions.js';
 
-window.api = api;
+window.api = new Api("blah");
 
 var GoogleAuth;
 var SCOPE = 'email https://www.googleapis.com/auth/calendar'
@@ -49,17 +49,18 @@ function setSigninStatus(isSignedIn) {
     console.log(resp, resp.code);
   }).catch((e) => console.log("offline access error", e));
   */
+
   window.user = user;
   console.log("User", user.getBasicProfile().getEmail());
   var token = user.getAuthResponse().id_token;
-  console.log("SENDING", token);
-  fetch('http://localhost:8000/quotes', {
-    headers: new Headers({
-      'Authorization': 'Bearer ' + token
-    })
-  }).then((resp) => {
-    resp.json().then((data) => console.log(data))
-  });
+
+  window.api = new Api(token);
+
+  window.api.getEmail()
+    .then((resp) => {
+      resp.json().then((data) => console.log(data))
+    });
+
   var isAuthorized = user.hasGrantedScopes(SCOPE);
   console.log(isAuthorized);
   if (isAuthorized) {

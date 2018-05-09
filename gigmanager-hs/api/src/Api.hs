@@ -14,23 +14,35 @@
 -- implementation would likely be split out into separate files.
 module Api where
 
+import Control.Lens
 import Servant
-import Servant.Foreign (HasForeign, Foreign, foreignFor)
+import Servant.Foreign
+import           Servant.API.Modifiers (RequiredArgument)
 import qualified Data.Text as T
 import Servant.Server.Experimental.Auth (AuthServerData)
 
 import Types
 
 -- Provide the missing HasForeign instance for AuthProtect, such that it is
--- compatible with JS generation and servant-options.
--- see https://github.com/sordina/servant-options/issues/2
-instance (HasForeign lang ftype api) =>
-  HasForeign lang ftype (AuthProtect k :> api) where
-
-  type Foreign ftype (AuthProtect k :> api) = Foreign ftype api
+-- compatible with JS generation and servant-options. See
+--
+-- * https://github.com/sordina/servant-options/issues/2
+-- * https://github.com/haskell-servant/servant-auth/issues/8
+instance forall lang ftype api.
+    ( HasForeign lang ftype api
+    , HasForeignType lang ftype T.Text
+    )
+  => HasForeign lang ftype (AuthProtect "google-jwt" :> api) where
+  type Foreign ftype (AuthProtect "google-jwt" :> api) = Foreign ftype api
 
   foreignFor lang Proxy Proxy subR =
-    foreignFor lang Proxy (Proxy :: Proxy api) subR
+    foreignFor lang Proxy (Proxy :: Proxy api) req
+    where
+      req = subR{ _reqHeaders = HeaderArg arg : _reqHeaders subR }
+      arg = Arg
+        { _argName = PathSegment "Authorization"
+        , _argType = typeFor lang (Proxy :: Proxy ftype) (Proxy :: Proxy T.Text)
+        }
 
 -- Associate the Account type with any route tagged "google-jwt".
 type instance AuthServerData (AuthProtect "google-jwt") = Account
