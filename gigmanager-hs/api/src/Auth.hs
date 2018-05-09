@@ -11,6 +11,7 @@ module Auth where
 import Types
 
 import           Control.Concurrent               (readMVar)
+import           Control.Lens                     (at, (^.))
 import           Control.Monad.Except
     (MonadError, MonadIO, liftIO, runExceptT, throwError)
 import           Crypto.JWT
@@ -18,8 +19,11 @@ import           Crypto.JWT
     , JWTError
     , decodeCompact
     , defaultJWTValidationSettings
+    , unregisteredClaims
     , verifyClaims
     )
+import           Data.Aeson
+    (Result (Error, Success), fromJSON)
 import qualified Data.ByteString.Char8            as B8
 import qualified Data.ByteString.Lazy.Char8       as L8
 import           Data.Monoid                      ((<>))
@@ -41,16 +45,19 @@ validateJwt clientId keyset bearerCreds = do
   -- Authorization header is passed in, we need to drop the leading "Bearer "
   -- text before decoding.
   --
-  -- TODO: Come back and either remove or explain the liftIO . runExceptT
+  -- See explanation of liftIO . runExceptT in `handler`.
   verifiedJwt <- liftIO . runExceptT $
         decodeCompact (L8.fromStrict $ B8.drop (B8.length "Bearer ") bearerCreds)
     >>= verifyClaims config keyset
 
-  -- TODO: Extract email from JWT and put in account.
   case verifiedJwt of
     Left (e :: JWTError) -> throwError ("Could not verify JWT: " <> show e)
-    Right _              -> return Account
+    Right claimset       -> do
+      let emailClaim = fromJSON <$> claimset ^. unregisteredClaims ^. at "email"
 
+      email <- (maybeToError "No email claim present" emailClaim) >>= aesonResultToError
+
+      return (Account { acctEmail = email })
 
 -- A servant Generalized Authorization handler. Will 401 unless a valid JWT is present.
 handler :: AppConfig -> AuthHandler Request Account
@@ -58,6 +65,16 @@ handler config = mkAuthHandler f
   where
     f req = do
       keyset <- liftIO . readMVar $ cnfJwk config
+
+      -- This is more convolute than it needs to be because verifyClaims (in
+      -- validateJwt) needs to run MonadTime, which in this case is IO. But I
+      -- don't want to use servant specific exception handling for errors (i.e.
+      -- using throw401 directly inside validateJwt), so am using runExceptT so
+      -- that throwError is captured in an Either.  This same pattern is also
+      -- used inside validateJwt.
+      --
+      -- jose-0.7 provides verifyClaimsAt which means the MonadTime requirement
+      -- could be pulled up and this likely simplified.
       account <- liftIO . runExceptT $
             maybeToError "No Authorization header present" (lookupReqHeader "Authorization" req)
         >>= validateJwt (cnfOauthClientId config) keyset
@@ -67,5 +84,9 @@ handler config = mkAuthHandler f
     lookupReqHeader h = lookup h . requestHeaders
     throw401 s = throwError err401 { errBody = L8.pack s }
 
-    maybeToError :: (MonadError e m) => e -> Maybe a -> m a
-    maybeToError s = maybe (throwError s) (return)
+aesonResultToError :: MonadError String m => Result a -> m a
+aesonResultToError (Error e) = throwError e
+aesonResultToError (Success x) = return x
+
+maybeToError :: (MonadError e m) => e -> Maybe a -> m a
+maybeToError s = maybe (throwError s) (return)

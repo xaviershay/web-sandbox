@@ -4,6 +4,7 @@ module Main where
 
 import           Control.Concurrent
 import           Control.Monad                          (when)
+import qualified Data.Text as T
 import qualified Data.Text.IO                           as T
 import           Network.Wai.Handler.Warp
 import           Network.Wai.Middleware.Cors
@@ -45,7 +46,7 @@ app config =
 
 main :: IO ()
 main = do
-  clientId <- T.readFile "oauth-client-id"
+  clientId <- T.strip <$> T.readFile "oauth-client-id"
   config   <- mkConfig clientId
 
   -- Spawn a background thread to fetch and keep current Google's public JWK,

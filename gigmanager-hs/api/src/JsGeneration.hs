@@ -14,13 +14,11 @@ import Api
 
 writeJsClient :: T.Text -> FilePath -> IO ()
 writeJsClient host path = do
-  let jsApi = jsForAPI myApiProxy .  reactWith $
+  let jsApi = jsForAPI myApiProxy .  vanillaJSWith $
                 defCommonGeneratorOptions { urlPrefix = host }
 
   T.writeFile path jsApi
 
--- "../frontend/src/ApiFunctions.js"
--- "http://localhost:8000"
 react :: JavaScriptGenerator
 react = reactWith defCommonGeneratorOptions
 
